@@ -120,7 +120,7 @@ def build_workbook(
     ws = wb.create_sheet("Расчёт", 0)
     headers = [
         "Месяц", "Оклад начислено", "Премии", "Итого (грязными)",
-        "Вычет", "База НДФЛ", "НДФЛ", "На руки", "Ставка эффективная",
+        "Вычет", "База НДФЛ", "НДФЛ", "На руки", "Ставка НДФЛ",
         "Итог год начислено", "Итог год НДФЛ", "Итог год на руки",
     ]
     ws.append(headers)
@@ -142,7 +142,7 @@ def build_workbook(
             base_formula,
             float(r.result.tax),
             net_formula,
-            float(r.result.effective_rate.quantize(Decimal("0.0001"))),
+            r.result.rate_label,  # фактическая ставка из шкалы: 13/15/18/20/22%
             float(r.result.cumulative_gross),
             float(r.result.cumulative_tax),
             float(r.result.cumulative_gross - r.result.cumulative_tax),
@@ -174,8 +174,19 @@ def build_workbook(
             ",0)"
         )
         ws.cell(row=row, column=7).value = tax_formula
-        # эффективная ставка и накопленные итоги — тоже формулы
-        ws.cell(row=row, column=9).value = f"=IF(D{row}=0,0,G{row}/D{row})"
+        # ставка из шкалы (текстом: 13% / 15% и т.д.) и накопленные итоги — формулы
+        cum_tax = f"SUM($G${first_data_row}:G{row})"
+        prev_tax = f"SUM($G${first_data_row}:G{row - 1})" if row > first_data_row else "0"
+        rate_formula = (
+            '=IF(D{r}=0,"",'
+            'IF(ROUND({ct}-{pt},0)<=0,"",'
+            'IF({cb}<=2400000,"13%",IF({cb}<=5000000,'
+            'IF({pb}<2400000,"13 / 15%","15%"),'
+            'IF({cb}<=20000000,IF({pb}<5000000,"15 / 18%","18%"),'
+            'IF({cb}<=50000000,IF({pb}<20000000,"18 / 20%","20%"),"22%"))))))'.format(
+                r=row, ct=cum_tax, pt=prev_tax, cb=cum_base, pb=prev_base)
+        )
+        ws.cell(row=row, column=9).value = rate_formula
         ws.cell(row=row, column=10).value = f"=SUM($D${first_data_row}:D{row})"
         ws.cell(row=row, column=11).value = f"=SUM($G${first_data_row}:G{row})"
         ws.cell(row=row, column=12).value = f"=J{row}-K{row}"
@@ -185,8 +196,9 @@ def build_workbook(
     sums = ["ИТОГО"]
     for col_idx in range(2, 13):
         letter = get_column_letter(col_idx)
-        if col_idx == 9:  # эффективная ставка — среднее
-            sums.append(f"=IF(SUM(D{first_data_row}:D{last_data_row})=0,0,SUM(G{first_data_row}:G{last_data_row})/SUM(D{first_data_row}:D{last_data_row}))")
+        if col_idx == 9:  # ставки, применявшиеся в периоде — список уникальных значений колонки I
+            rng = f"I{first_data_row}:I{last_data_row}"
+            sums.append(f'=TEXTJOIN(", ",TRUE,{rng})')
         elif col_idx in (10, 11, 12):  # накопительные итоги — берём последнее значение
             sums.append(f"={letter}{last_data_row}")
         else:
@@ -199,8 +211,10 @@ def build_workbook(
     for row in ws.iter_rows(min_row=first_data_row, max_row=total_row):
         for cell in row:
             cell.border = BORDER
-            if cell.column_letter in "BCDEFGHIJKL":
-                cell.number_format = PCT_FMT if cell.column_letter == "I" else MONEY_FMT
+            if cell.column_letter == "I":
+                cell.number_format = "General"  # ставка — текст из шкалы (13% / 15%)
+            elif cell.column_letter in "BCDEFGHJKL":
+                cell.number_format = MONEY_FMT
 
     widths = (16, 16, 14, 16, 10, 14, 12, 14, 12, 18, 16, 18)
     for idx, width in enumerate(widths, start=1):

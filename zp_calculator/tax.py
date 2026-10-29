@@ -104,6 +104,30 @@ def tax_on_cumulative(income: Decimal, brackets: list | None = None) -> Decimal:
     return tax
 
 
+def rates_applied(base_before: Decimal, base_after: Decimal,
+                  brackets: list | None = None) -> list[Decimal]:
+    """Ставки НДФЛ (из шкалы), фактически применённые к доходу месяца.
+
+    Возвращает список целых процентов (13, 15, 18, 20 или 22). В месяце,
+    когда накопленная база пересекает порог шкалы, ставок может быть две.
+    """
+    if brackets is None:
+        brackets = BRACKETS_2025
+    base_before = max(base_before, Decimal("0"))
+    used: list[Decimal] = []
+    prev = Decimal("0")
+    for threshold, rate in brackets:
+        upper = threshold if threshold is not None else None
+        overlaps = (upper is None) or (min(base_after, upper) > base_before)
+        if overlaps and rate not in used:
+            used.append(rate)
+        if upper is not None and base_after <= upper:
+            break
+        if upper is not None:
+            prev = upper
+    return used
+
+
 @dataclass
 class Child:
     """Ребёнок для стандартного вычета."""
@@ -139,9 +163,14 @@ class MonthResult:
     taxable: Decimal         # налогооблагаемая база месяца
     tax: Decimal             # НДФЛ за месяц
     net: Decimal             # на руки
-    effective_rate: Decimal  # эффективная ставка НДФЛ за месяц
+    rates: list[Decimal]     # фактические ставки НДФЛ в месяце (13/15/18/20/22)
     cumulative_gross: Decimal
     cumulative_tax: Decimal
+
+    @property
+    def rate_label(self) -> str:
+        """Ставка для отображения: «13%», «13 / 15%» (месяц перехода через порог)."""
+        return " / ".join(str(int((r * 100).to_integral_value())) for r in self.rates) + "%"
 
 
 class YearTaxCalculator:
@@ -181,7 +210,7 @@ class YearTaxCalculator:
             month_tax = Decimal("0")
 
         self.cumulative_tax += month_tax
-        effective_rate = (month_tax / gross) if gross else Decimal("0")
+        rates = rates_applied(base_before, base_after, self.brackets)
 
         return MonthResult(
             gross=gross,
@@ -189,7 +218,7 @@ class YearTaxCalculator:
             taxable=max(gross - deduction, Decimal("0")),
             tax=month_tax,
             net=money(gross - month_tax),
-            effective_rate=effective_rate,
+            rates=rates,
             cumulative_gross=self.cumulative_gross,
             cumulative_tax=self.cumulative_tax,
         )
