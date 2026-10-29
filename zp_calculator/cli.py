@@ -103,6 +103,33 @@ def render(reports, summary, config: PayrollConfig, console: Console) -> None:
     ))
 
 
+def _ask_date(prompt_fn, prompt: str, *, optional: bool = False, month: bool = False) -> str:
+    """Запрашивает дату/месяц до тех пор, пока не будет введено корректное значение.
+
+    Отклоняет несуществующие календарные даты (31.09, 30.02 и т.п.) и месяцы вне 1–12.
+    """
+    import calendar
+
+    while True:
+        raw = prompt_fn(prompt).strip()
+        if not raw and (optional or month):
+            return ""
+        parts = raw.split("-")
+        ok = len(parts) == (2 if month else 3)
+        if ok:
+            try:
+                y, m = int(parts[0]), int(parts[1])
+                d = 1 if month else int(parts[2])
+                ok = 1 <= m <= 12 and (month or 1 <= d <= calendar.monthrange(y, m)[1])
+            except ValueError:
+                ok = False
+        if ok:
+            return raw
+        hint = "месяц в формате ГГГГ-ММ" if month else "дата в формате ГГГГ-ММ-ДД"
+        print(f"      ! Некорректный ввод: должна быть {hint}, существующая "
+              f"(в сентябре 30 дней, в феврале 28/29). Попробуйте ещё раз.")
+
+
 def interactive(console: Console) -> PayrollConfig:
     """Пошаговый ввод данных без файла конфигурации."""
     year = int(input("Год расчёта [2026]: ").strip() or "2026")
@@ -113,8 +140,8 @@ def interactive(console: Console) -> PayrollConfig:
         salary = input(f"  Оклад №{len(periods) + 1}, ₽: ").strip()
         if not salary:
             break
-        start_raw = input("    Дата с (ГГГГ-ММ-ДД): ").strip()
-        end_raw = input("    Дата по (ГГГГ-ММ-ДД, Enter — бессрочно): ").strip()
+        start_raw = _ask_date(input, "    Дата с (ГГГГ-ММ-ДД): ")
+        end_raw = _ask_date(input, "    Дата по (ГГГГ-ММ-ДД, Enter — бессрочно): ", optional=True)
         periods.append(SalaryPeriod(
             salary=Decimal(salary),
             start=date.fromisoformat(start_raw),
@@ -124,7 +151,7 @@ def interactive(console: Console) -> PayrollConfig:
     bonuses: list[Bonus] = []
     print("Премии (пустой месяц — закончить ввод):")
     while True:
-        month = input("  Месяц ГГГГ-ММ: ").strip()
+        month = _ask_date(input, "  Месяц ГГГГ-ММ: ", month=True)
         if not month:
             break
         kind = input("  [f] фиксированная сумма / [p] % от оклада [f]: ").strip().lower() or "f"

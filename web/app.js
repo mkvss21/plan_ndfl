@@ -81,13 +81,31 @@ function parseNum(text) {
   return Number(cleaned);
 }
 
+/**
+ * Разбирает строку "YYYY-MM-DD" и строго проверяет существование даты:
+ * месяц 1..12, день не больше количества дней в этом месяце с учётом
+ * високосных годов (31.09, 31.04, 30.02 в невисокосном году — ошибка).
+ * Возвращает объект с датой либо null (пустая строка), либо строку с текстом ошибки.
+ */
 function parseDateParts(value) {
   // value из <input type="date"> — "YYYY-MM-DD" или ""
   if (!value) return null;
-  const [y, m, d] = value.split("-").map(Number);
-  if (!y || !m || !d) return null;
+  const parts = String(value).split("-");
+  if (parts.length !== 3) return "неверный формат даты (ожидается ГГГГ-ММ-ДД)";
+  const [y, m, d] = parts.map(Number);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) {
+    return `некорректная дата «${value}»`;
+  }
+  if (m < 1 || m > 12) return `месяц ${m} вне диапазона 1–12 (дата ${value})`;
+  const dim = daysInMonth(y, m);
+  if (d < 1 || d > dim) {
+    return `в ${MONTHS_RU[m - 1]} ${y} г. только ${dim} дн., а указана дата ${String(d).padStart(2, "0")}.${String(m).padStart(2, "0")}.${y}`;
+  }
   return { y, m, d, time: new Date(y, m - 1, d).getTime(), label: `${String(d).padStart(2, "0")}.${String(m).padStart(2, "0")}.${y}` };
 }
+
+/** true, если значение — существующая календарная дата "YYYY-MM-DD". */
+const isValidDateStr = (v) => !v || typeof parseDateParts(v) !== "string";
 
 function readState() {
   const state = { year: parseNum(document.getElementById("year").value) || new Date().getFullYear(),
@@ -98,8 +116,15 @@ function readState() {
 
   document.querySelectorAll("#salaryRows .grid").forEach((row, idx) => {
     const salary = parseNum(row.querySelector("[data-f=salary]").value);
-    const start = parseDateParts(row.querySelector("[data-f=start]").value);
-    const end = parseDateParts(row.querySelector("[data-f=end]").value);
+    const rawStart = row.querySelector("[data-f=start]").value;
+    const rawEnd = row.querySelector("[data-f=end]").value;
+    const start = parseDateParts(rawStart);
+    const end = parseDateParts(rawEnd);
+    // подсветка полей с несуществующими датами (31.09, 30.02 и т.п.)
+    row.querySelector("[data-f=start]").classList.toggle("invalid", typeof start === "string");
+    row.querySelector("[data-f=end]").classList.toggle("invalid", typeof end === "string");
+    if (typeof start === "string") { state.errors.push(`Период №${idx + 1}: дата «с» — ${start}`); return; }
+    if (typeof end === "string") { state.errors.push(`Период №${idx + 1}: дата «по» — ${end}`); return; }
     const hasData = !Number.isNaN(salary) || start || end;
     if (!hasData) return;
     if (Number.isNaN(salary) || salary < 0) { state.errors.push(`Период №${idx + 1}: укажите корректный оклад`); return; }
@@ -118,6 +143,10 @@ function readState() {
     if (!monthVal) { state.errors.push(`Премия №${idx + 1}: укажите месяц`); return; }
     if (Number.isNaN(value) || value < 0) { state.errors.push(`Премия №{idx + 1}: некорректное значение`.replace("{idx + 1}", idx + 1)); return; }
     const [y, m] = monthVal.split("-").map(Number);
+    if (!Number.isInteger(y) || !Number.isInteger(m) || m < 1 || m > 12) {
+      state.errors.push(`Премия №${idx + 1}: некорректный месяц «${monthVal}»`);
+      return;
+    }
     state.bonuses.push({ year: y, month: m, note, type, value });
   });
 
@@ -274,10 +303,11 @@ function recalc() {
 function addSalaryRow(salary = "", start = "", end = "") {
   const div = document.createElement("div");
   div.className = "grid g4";
+  // max по месяцам задать нельзя, поэтому даты проверяются в recalc() с подсветкой ошибки
   div.innerHTML = `
     <input data-f="salary" type="text" inputmode="decimal" placeholder="150 000" value="${salary}">
-    <input data-f="start" type="date" value="${start}">
-    <input data-f="end" type="date" value="${end}">
+    <input data-f="start" type="date" min="2000-01-01" max="2100-12-31" value="${start}">
+    <input data-f="end" type="date" min="2000-01-01" max="2100-12-31" value="${end}">
     <button class="del" title="Удалить">×</button>`;
   div.querySelector(".del").onclick = () => { div.remove(); recalc(); };
   div.querySelectorAll("input").forEach((i) => i.addEventListener("input", recalc));
@@ -517,6 +547,8 @@ function readStateForExport() {
     const salary = parseNum(row.querySelector("[data-f=salary]").value);
     const start = parseDateParts(row.querySelector("[data-f=start]").value);
     const end = parseDateParts(row.querySelector("[data-f=end]").value);
+    // даты, не существующие в календаре (31.09 и т.п.), в экспорт не попадают
+    if (typeof start === "string" || typeof end === "string") return;
     if ((Number.isNaN(salary) && !start) || salary < 0 || !start) return;
     state.periods.push({ salary, start, end });
   });
@@ -527,9 +559,29 @@ function readStateForExport() {
     const value = parseNum(row.querySelector("[data-f=value]").value);
     if (!monthVal || Number.isNaN(value) || value < 0) return;
     const [y, m] = monthVal.split("-").map(Number);
+    if (!Number.isInteger(y) || !Number.isInteger(m) || m < 1 || m > 12) return;
     state.bonuses.push({ year: y, month: m, note, type, value });
   });
   return state;
+}
+
+/** Проверка дат загруженного файла: возвращает список ошибок (пустой — файл валиден). */
+function validateTemplateDates(tpl) {
+  const errs = [];
+  (tpl.periods || []).forEach((p, i) => {
+    const s = parseDateParts(p.start), e = parseDateParts(p.end);
+    if (typeof s === "string") errs.push(`период №${i + 1} (дата «с»): ${s}`);
+    if (typeof e === "string") errs.push(`период №${i + 1} (дата «по»): ${e}`);
+  });
+  (tpl.bonuses || []).forEach((b, i) => {
+    if (!b.month) return;
+    const parts = String(b.month).split("-");
+    const m = Number(parts[1]);
+    if (parts.length < 2 || !Number.isInteger(m) || m < 1 || m > 12) {
+      errs.push(`премия №${i + 1}: некорректный месяц «${b.month}»`);
+    }
+  });
+  return errs;
 }
 
 /** Импорт из JSON: поддерживается формат конфига ядра и формат самого шаблона. */
@@ -560,6 +612,11 @@ function importTemplateJson(text, fileName) {
     tpl = { periods: [], bonuses: [], ...data }; // собственный формат шаблона
   } else {
     toast("В файле нет ни salary_periods, ни periods — неизвестный формат");
+    return;
+  }
+  const dateErrs = validateTemplateDates(tpl);
+  if (dateErrs.length) {
+    toast(`Файл не загружен: ${dateErrs.join("; ")}`);
     return;
   }
   const name = ((fileName || "").replace(/\.json$/i, "") || `Импорт ${new Date().toLocaleDateString("ru-RU")}`).trim();
@@ -619,7 +676,8 @@ if (lastTpl) {
 // Экспорт функций для тестов в Node.js (см. tests/test_web_templates.js)
 // ---------------------------------------------------------------------------
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { parseNum, parseDateParts, taxOnCumulative, setBracketsForYear, roundTax,
+  module.exports = { parseNum, parseDateParts, isValidDateStr, validateTemplateDates,
+                     taxOnCumulative, setBracketsForYear, roundTax,
                      marginalRate, calculate,
                      collectTemplate, applyTemplate, importTemplateJson, loadTemplates, persistTemplates };
 }

@@ -50,10 +50,20 @@ def _dec(value) -> Decimal:
     return Decimal(str(value))
 
 
-def _date(value) -> date:
+def _date(value, what: str = "дата") -> date:
     if isinstance(value, date):
         return value
-    return date.fromisoformat(str(value))
+    text = str(value)
+    try:
+        return date.fromisoformat(text)
+    except ValueError as exc:
+        # fromisoformat бросает ValueError и на неверный формат, и на
+        # несуществующие даты (31.09, 30.02 невисокосного года, месяц 13)
+        raise ValueError(
+            f"{what} «{text}» некорректна: проверьте формат ГГГГ-ММ-ДД "
+            f"и существование дня в этом месяце (в сентябре 30 дней, "
+            f"в феврале 28/29)"
+        ) from exc
 
 
 def parse_config(raw: dict) -> PayrollConfig:
@@ -61,10 +71,10 @@ def parse_config(raw: dict) -> PayrollConfig:
     periods = [
         SalaryPeriod(
             salary=_dec(p["salary"]),
-            start=_date(p["start"]),
-            end=_date(p["end"]) if p.get("end") else None,
+            start=_date(p["start"], f"Дата начала периода №{i + 1}"),
+            end=_date(p["end"], f"Дата окончания периода №{i + 1}") if p.get("end") else None,
         )
-        for p in raw.get("salary_periods", [])
+        for i, p in enumerate(raw.get("salary_periods", []))
     ]
     if not periods:
         raise ValueError("В конфигурации не указано ни одного периода оклада (salary_periods)")
@@ -73,10 +83,10 @@ def parse_config(raw: dict) -> PayrollConfig:
         Bonus(
             amount=_dec(b["amount"]) if b.get("amount") is not None else None,
             percent_of_salary=_dec(b["percent_of_salary"]) if b.get("percent_of_salary") is not None else None,
-            month=_date(b["month"]),
+            month=_date(b["month"], f"Месяц премии №{j + 1}"),
             note=b.get("note", ""),
         )
-        for b in raw.get("bonuses", [])
+        for j, b in enumerate(raw.get("bonuses", []))
     ]
     for b in bonuses:
         if b.amount is None and b.percent_of_salary is None:
