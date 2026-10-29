@@ -338,6 +338,224 @@ function copyTable() {
   navigator.clipboard?.writeText(text);
 }
 
+// ---------------------------------------------------------------------------
+// Шаблоны (localStorage + импорт/экспорт JSON в формате конфига ядра)
+// ---------------------------------------------------------------------------
+
+const TPL_KEY = "zp-calc-templates-v1";
+
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+function loadTemplates() {
+  try {
+    const obj = JSON.parse(localStorage.getItem(TPL_KEY) || "{}");
+    return obj && typeof obj === "object" ? obj : {};
+  } catch { return {}; }
+}
+
+function persistTemplates(obj) {
+  localStorage.setItem(TPL_KEY, JSON.stringify(obj));
+}
+
+function refreshTplSelect(selectedName) {
+  const sel = document.getElementById("tplSelect");
+  sel.innerHTML = "";
+  sel.add(new Option("— выберите шаблон —", ""));
+  for (const name of Object.keys(loadTemplates()).sort((a, b) => a.localeCompare(b, "ru"))) {
+    sel.add(new Option(name, name));
+  }
+  if (selectedName) sel.value = selectedName;
+}
+
+/** Текущий ввод страницы → объект шаблона. */
+function collectTemplate() {
+  const periods = [], bonuses = [];
+  document.querySelectorAll("#salaryRows .grid").forEach((row) => {
+    const salary = parseNum(row.querySelector("[data-f=salary]").value);
+    const start = row.querySelector("[data-f=start]").value;
+    const end = row.querySelector("[data-f=end]").value;
+    if (Number.isNaN(salary) && !start && !end) return;
+    periods.push({ salary: Number.isNaN(salary) ? null : salary, start, end });
+  });
+  document.querySelectorAll("#bonusRows .grid").forEach((row) => {
+    const month = row.querySelector("[data-f=month]").value;
+    const note = row.querySelector("[data-f=note]").value.trim();
+    const type = row.querySelector("[data-f=type]").value;
+    const value = parseNum(row.querySelector("[data-f=value]").value);
+    if (!month && Number.isNaN(value)) return;
+    bonuses.push({ month, note, type, value: Number.isNaN(value) ? null : value });
+  });
+  return {
+    year: document.getElementById("year").value,
+    fromMonth: document.getElementById("fromMonth").value,
+    toMonth: document.getElementById("toMonth").value,
+    children: document.getElementById("children").value,
+    periods, bonuses,
+  };
+}
+
+function applyTemplate(t, markAsLast = true) {
+  document.getElementById("salaryRows").innerHTML = "";
+  document.getElementById("bonusRows").innerHTML = "";
+  document.getElementById("year").value = t.year ?? new Date().getFullYear();
+  fillMonthSelects();
+  document.getElementById("fromMonth").value = t.fromMonth ?? "1";
+  document.getElementById("toMonth").value = t.toMonth ?? "12";
+  document.getElementById("children").value = t.children ?? "0";
+  (t.periods || []).forEach((p) => addSalaryRow(p.salary ?? "", p.start ?? "", p.end ?? ""));
+  (t.bonuses || []).forEach((b) => addBonusRow(b.month ?? "", b.note ?? "", b.type ?? "fixed", b.value ?? ""));
+  if (!(t.periods || []).length) addSalaryRow();
+  recalc();
+  if (markAsLast) {
+    const name = document.getElementById("tplSelect").value;
+    if (name) localStorage.setItem(TPL_KEY + ":last", name);
+  }
+}
+
+function saveTemplate() {
+  let name = document.getElementById("tplName").value.trim();
+  const sel = document.getElementById("tplSelect");
+  if (!name) name = sel.value || prompt("Название шаблона:");
+  if (!name) return;
+  const all = loadTemplates();
+  all[name] = collectTemplate();
+  persistTemplates(all);
+  refreshTplSelect(name);
+  localStorage.setItem(TPL_KEY + ":last", name);
+  document.getElementById("tplName").value = "";
+  toast(`Шаблон «${name}» сохранён`);
+}
+
+function applySelectedTemplate() {
+  const name = document.getElementById("tplSelect").value;
+  if (!name) { toast("Сначала выберите шаблон из списка"); return; }
+  const t = loadTemplates()[name];
+  if (!t) { toast("Шаблон не найден"); return; }
+  applyTemplate(t);
+  toast(`Шаблон «${name}» загружен`);
+}
+
+function deleteTemplate() {
+  const name = document.getElementById("tplSelect").value;
+  if (!name) { toast("Сначала выберите шаблон из списка"); return; }
+  if (!confirm(`Удалить шаблон «${name}»?`)) return;
+  const all = loadTemplates();
+  delete all[name];
+  persistTemplates(all);
+  if (localStorage.getItem(TPL_KEY + ":last") === name) localStorage.removeItem(TPL_KEY + ":last");
+  refreshTplSelect();
+  toast(`Шаблон «${name}» удалён`);
+}
+
+/** Экспорт текущего ввода в формат config.json расчётного ядра. */
+function exportTemplateJson() {
+  const s = readStateForExport();
+  const cfg = {
+    year: s.year,
+    start_month: s.fromMonth,
+    end_month: s.toMonth,
+    salary_periods: s.periods.map((p) => ({
+      salary: p.salary,
+      start: isoFromParts(p.start),
+      ...(p.end ? { end: isoFromParts(p.end) } : {}),
+    })),
+    bonuses: s.bonuses.map((b) => ({
+      month: `${b.year}-${String(b.month).padStart(2, "0")}-01`,
+      ...(b.type === "percent" ? { percent_of_salary: b.value } : { amount: b.value }),
+      ...(b.note ? { note: b.note } : {}),
+    })),
+    children: Array.from({ length: s.children }, (_, i) => ({ name: `Ребёнок ${i + 1}` })),
+  };
+  const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `zp-template-${cfg.year}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Файл шаблона скачан");
+}
+
+const isoFromParts = (d) =>
+  d ? `${String(d.y).padStart(4, "0")}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}` : "";
+
+/** Облегчённый парсер для экспорта: без проверок на пересечения и ошибок. */
+function readStateForExport() {
+  const state = { year: parseNum(document.getElementById("year").value) || new Date().getFullYear(),
+                  fromMonth: Number(document.getElementById("fromMonth").value),
+                  toMonth: Number(document.getElementById("toMonth").value),
+                  children: Math.max(0, parseNum(document.getElementById("children").value) || 0),
+                  periods: [], bonuses: [] };
+  document.querySelectorAll("#salaryRows .grid").forEach((row) => {
+    const salary = parseNum(row.querySelector("[data-f=salary]").value);
+    const start = parseDateParts(row.querySelector("[data-f=start]").value);
+    const end = parseDateParts(row.querySelector("[data-f=end]").value);
+    if ((Number.isNaN(salary) && !start) || salary < 0 || !start) return;
+    state.periods.push({ salary, start, end });
+  });
+  document.querySelectorAll("#bonusRows .grid").forEach((row) => {
+    const monthVal = row.querySelector("[data-f=month]").value;
+    const note = row.querySelector("[data-f=note]").value.trim();
+    const type = row.querySelector("[data-f=type]").value;
+    const value = parseNum(row.querySelector("[data-f=value]").value);
+    if (!monthVal || Number.isNaN(value) || value < 0) return;
+    const [y, m] = monthVal.split("-").map(Number);
+    state.bonuses.push({ year: y, month: m, note, type, value });
+  });
+  return state;
+}
+
+/** Импорт из JSON: поддерживается формат конфига ядра и формат самого шаблона. */
+function importTemplateJson(text, fileName) {
+  let data;
+  try { data = JSON.parse(text); } catch { toast("Не удалось прочитать JSON-файл"); return; }
+  let tpl;
+  if (Array.isArray(data.salary_periods)) {
+    // формат examples/config.json (конфиг Python-ядра)
+    tpl = {
+      year: String(data.year ?? new Date().getFullYear()),
+      fromMonth: String(data.start_month ?? 1),
+      toMonth: String(data.end_month ?? 12),
+      children: Array.isArray(data.children) ? String(data.children.length) : "0",
+      periods: data.salary_periods.map((p) => ({
+        salary: p.salary,
+        start: String(p.start ?? "").slice(0, 10),
+        end: p.end ? String(p.end).slice(0, 10) : "",
+      })),
+      bonuses: (data.bonuses || []).map((b) => ({
+        month: String(b.month ?? "").slice(0, 7),
+        note: b.note ?? "",
+        type: b.percent_of_salary != null ? "percent" : "fixed",
+        value: b.percent_of_salary != null ? b.percent_of_salary : b.amount,
+      })),
+    };
+  } else if (Array.isArray(data.periods) || Array.isArray(data.bonuses)) {
+    tpl = { periods: [], bonuses: [], ...data }; // собственный формат шаблона
+  } else {
+    toast("В файле нет ни salary_periods, ни periods — неизвестный формат");
+    return;
+  }
+  const name = ((fileName || "").replace(/\.json$/i, "") || `Импорт ${new Date().toLocaleDateString("ru-RU")}`).trim();
+  applyTemplate(tpl, false);
+  const all = loadTemplates();
+  all[name] = collectTemplate();
+  persistTemplates(all);
+  refreshTplSelect(name);
+  localStorage.setItem(TPL_KEY + ":last", name);
+  toast(`Шаблон «${name}» загружен из файла и сохранён`);
+}
+
+// ---------------------------------------------------------------------------
+// Инфраструктура страницы (DOM, localStorage, обработчики) — только в браузере.
+// В Node.js app.js загружается без этой части для тестирования логики шаблонов.
+// ---------------------------------------------------------------------------
+if (typeof document !== "undefined") {
+
 document.getElementById("addSalary").onclick = () => { addSalaryRow(); recalc(); };
 document.getElementById("addBonus").onclick = () => { addBonusRow(); recalc(); };
 document.getElementById("loadDemo").onclick = demo;
@@ -347,5 +565,38 @@ document.getElementById("copyBtn").onclick = copyTable;
 ["year", "fromMonth", "toMonth", "children"].forEach((id) =>
   document.getElementById(id).addEventListener("input", recalc));
 
+document.getElementById("saveTpl").onclick = saveTemplate;
+document.getElementById("applyTpl").onclick = applySelectedTemplate;
+document.getElementById("deleteTpl").onclick = deleteTemplate;
+document.getElementById("exportTpl").onclick = exportTemplateJson;
+document.getElementById("importTpl").onclick = () => document.getElementById("importFile").click();
+document.getElementById("importFile").onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => importTemplateJson(String(reader.result), file.name);
+  reader.readAsText(file);
+  e.target.value = "";
+};
+document.getElementById("tplSelect").onchange = (e) => { if (e.target.value) applySelectedTemplate(); };
+
 fillMonthSelects();
-demo();
+refreshTplSelect();
+const lastTplName = localStorage.getItem(TPL_KEY + ":last") || "";
+const lastTpl = loadTemplates()[lastTplName];
+if (lastTpl) {
+  document.getElementById("tplSelect").value = lastTplName;
+  applyTemplate(lastTpl, false); // при повторном открытии — сразу последний использованный шаблон
+} else {
+  demo();
+}
+
+} // конец браузерной части (typeof document !== "undefined")
+
+// ---------------------------------------------------------------------------
+// Экспорт функций для тестов в Node.js (см. tests/test_web_templates.js)
+// ---------------------------------------------------------------------------
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { parseNum, parseDateParts, taxOnCumulative, setBracketsForYear, roundTax,
+                     collectTemplate, applyTemplate, importTemplateJson, loadTemplates, persistTemplates };
+}
