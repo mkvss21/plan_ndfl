@@ -74,9 +74,14 @@ def render(reports, summary, config: PayrollConfig, console: Console) -> None:
             fmt(r.gross),
             fmt(r.tax),
             fmt(r.net),
-            fmt_pct(r.result.effective_rate),
+            r.result.rate_label,  # ставка из шкалы: 13/15/18/20/22%
         )
     table.add_section()
+    used_rates = []
+    for r in reports:
+        for lab in r.result.rate_label.split(", "):
+            if lab and lab not in used_rates:
+                used_rates.append(lab)
     table.add_row(
         "ИТОГО",
         fmt(summary.total_salary),
@@ -84,7 +89,7 @@ def render(reports, summary, config: PayrollConfig, console: Console) -> None:
         fmt(summary.total_gross),
         fmt(summary.total_tax),
         fmt(summary.total_net),
-        fmt_pct(summary.avg_effective_rate),
+        ", ".join(used_rates),
         style="bold",
     )
     console.print(table)

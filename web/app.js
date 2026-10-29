@@ -52,6 +52,25 @@ function taxOnCumulative(income) {
 /** НДФЛ округляется до целых рублей (ст. 225 п.6 НК РФ), как Decimal ROUND_HALF_UP. */
 const roundTax = (v) => Math.floor(Math.abs(v) + 0.5) * (v >= 0 ? 1 : -1);
 
+/**
+ * Ставка НДФЛ, фактически удержанная с дохода месяца. Шкала прогрессивная,
+ * поэтому в месяце перехода через порог возможны две ставки — показываем
+ * обе (например «13 / 15%»). Значение всегда из списка 13/15/18/20/22%.
+ */
+function marginalRate(baseBefore, baseAfter) {
+  if (baseAfter <= baseBefore || baseAfter <= 0) return "";
+  const lo = Math.max(baseBefore, 0);
+  const used = [];
+  let prev = 0;
+  for (const [limit, rate] of BRACKETS) {
+    const overlap = Math.min(baseAfter, limit) - lo;
+    if (overlap > 0) used.push(rate);
+    prev = limit;
+    if (baseAfter <= limit) break;
+  }
+  return used.map((r) => Math.round(r * 100)).join(" / ") + "%";
+}
+
 // ---------------------------------------------------------------------------
 // Парсинг ввода
 // ---------------------------------------------------------------------------
@@ -174,7 +193,8 @@ function calculate(state) {
       salary, bonus: bonusTotal, bonusNotes, gross,
       deduction, taxable: Math.max(gross - deduction, 0),
       tax, net: gross - tax,
-      rate: gross ? tax / gross : 0,
+      // фактическая ставка НДФЛ в этом месяце (одна из ступеней шкалы)
+      rate: marginalRate(baseBefore + 0.01, baseAfter),
       cumGross, cumTax,
     });
   }
@@ -207,7 +227,7 @@ function render(rows, errors) {
       <td>${r.deduction ? money(r.deduction) : ""}</td>
       <td class="err-cell">${money(r.tax)}</td>
       <td>${money(r.net)}</td>
-      <td>${pct(r.rate)}</td>
+      <td>${r.rate}</td>
       <td class="hide-sm">${money(r.cumGross)}</td>
       <td class="hide-sm">${money(r.cumTax)}</td>`;
     body.appendChild(tr);
@@ -219,11 +239,13 @@ function render(rows, errors) {
   }), { salary: 0, bonus: 0, gross: 0, tax: 0, net: 0 });
 
   if (rows.length) {
+    // ставки, реально применявшиеся в периоде (только целые из шкалы: 13/15/18/20/22)
+    const usedRates = [...new Set(rows.map((r) => r.rate).filter(Boolean))].join(", ");
     const tr = document.createElement("tr");
     tr.className = "total-row";
     tr.innerHTML = `<td>ИТОГО</td><td>${money(totals.salary)}</td><td>${money(totals.bonus)}</td>
       <td>${money(totals.gross)}</td><td></td><td>${money(totals.tax)}</td><td>${money(totals.net)}</td>
-      <td>${totals.gross ? pct(totals.tax / totals.gross) : "0%"}</td><td class="hide-sm"></td><td class="hide-sm"></td>`;
+      <td>${usedRates}</td><td class="hide-sm"></td><td class="hide-sm"></td>`;
     body.appendChild(tr);
   }
 
@@ -321,7 +343,7 @@ function exportCsv() {
   for (const r of lastRows) {
     lines.push([r.label, r.salary.toFixed(2), r.bonus.toFixed(2), r.gross.toFixed(2),
                 r.deduction.toFixed(2), r.tax.toFixed(0), r.net.toFixed(2),
-                (r.rate * 100).toFixed(2).replace(".", ",") + "%"].join(";"));
+                r.rate].join(";"));
   }
   const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
@@ -598,5 +620,6 @@ if (lastTpl) {
 // ---------------------------------------------------------------------------
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { parseNum, parseDateParts, taxOnCumulative, setBracketsForYear, roundTax,
+                     marginalRate, calculate,
                      collectTemplate, applyTemplate, importTemplateJson, loadTemplates, persistTemplates };
 }
