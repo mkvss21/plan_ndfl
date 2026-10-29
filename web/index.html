@@ -42,6 +42,12 @@
   tr.total-row td { background:#0b1220; font-weight:700; }
   .del { background:transparent; border:1px solid var(--line); color:var(--err); border-radius:8px;
          width:34px; padding:6px 0; font-weight:700; }
+  select.tpl { width:auto; min-width:220px; }
+  .toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%);
+           background:#0b1220; border:1px solid var(--ok); color:var(--text);
+           padding:10px 18px; border-radius:10px; opacity:0; pointer-events:none;
+           transition:opacity .25s; z-index:10; font-size:14px; }
+  .toast.show { opacity:1; }
   @media (max-width:760px){ .g4,.g4b{grid-template-columns:1fr 1fr;} .hide-sm{display:none;} }
 </style>
 </head>
@@ -57,6 +63,23 @@
     <div><label>Конечный месяц</label><select id="toMonth"></select></div>
     <button id="loadDemo" class="ghost">Загрузить пример</button>
     <button id="clearAll" class="ghost">Очистить</button>
+  </div>
+
+  <div class="card">
+    <h2>Шаблоны</h2>
+    <div class="toolbar" style="margin-bottom:0">
+      <div style="flex:1; min-width:230px"><label>Сохранённые шаблоны (в этом браузере)</label>
+        <select id="tplSelect" class="tpl"><option value="">— выберите шаблон —</option></select></div>
+      <div><label>Имя нового шаблона</label><input id="tplName" type="text" placeholder="напр. Работа 2026"></div>
+      <button id="saveTpl">💾 Сохранить шаблон</button>
+      <button id="applyTpl" class="ghost">Загрузить</button>
+      <button id="deleteTpl" class="ghost">Удалить</button>
+      <button id="exportTpl" class="ghost">Скачать JSON</button>
+      <button id="importTpl" class="ghost">Загрузить из файла</button>
+      <input id="importFile" type="file" accept=".json,application/json" hidden>
+    </div>
+    <div class="hint">Шаблоны хранятся локально в браузере (localStorage) и доступны при следующем открытии страницы.
+      «Скачать JSON» сохраняет шаблон в формате конфига расчётного ядра, «Загрузить из файла» читает такой JSON.</div>
   </div>
 
   <div class="card">
@@ -109,6 +132,8 @@
     <div class="hint">Расчёт выполняется локально в браузере, данные никуда не отправляются.</div>
   </div>
 </div>
+
+<div id="toast" class="toast"></div>
 
 <script src="app.js"></script>
 </body>
