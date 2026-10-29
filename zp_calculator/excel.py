@@ -21,7 +21,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from zp_calculator.payroll import Bonus, MonthReport, SalaryPeriod, uncovered_days
-from zp_calculator.tax import BRACKETS, CHILD_DEDUCTION_AMOUNTS, CHILD_INCOME_LIMIT
+from zp_calculator.tax import (
+    CHILD_DEDUCTION_AMOUNTS,
+    CHILD_INCOME_LIMIT,
+    brackets_for_year,
+)
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 TOTAL_FILL = PatternFill("solid", fgColor="DDEBF7")
@@ -88,15 +92,16 @@ def build_workbook(
         ws_bon.column_dimensions[col].width = width
 
     # -------------------------------------------------------------------- НДФЛ
+    tax_year = reports[0].year if reports else 2025
     ws_tax = wb.create_sheet("НДФЛ")
-    ws_tax.append(["Ставка НДФЛ, шкала 2025 (нарастающим итогом с начала года)"])
+    ws_tax.append([f"Ставка НДФЛ, шкала {tax_year} (нарастающим итогом с начала года)"])
     ws_tax["A1"].font = Font(bold=True)
     ws_tax.append([])
     ws_tax.append(["Доход с начала года до, руб", "Ставка"])
     for c in ws_tax[3]:
         _style_header(c)
     prev = 0
-    for threshold, rate in BRACKETS:
+    for threshold, rate in brackets_for_year(tax_year):
         limit = float(threshold) if threshold is not None else "∞"
         ws_tax.append([f"от {prev:,.0f} до {limit}" if threshold else f"свыше {prev:,.0f}", float(rate)])
         prev = int(threshold) if threshold else prev

@@ -11,9 +11,12 @@ from decimal import Decimal
 
 from zp_calculator.payroll import Bonus, SalaryPeriod, calculate_payroll, summarize
 from zp_calculator.tax import (
+    BRACKETS_2025,
+    BRACKETS_2026,
     Child,
     DeductionProfile,
     YearTaxCalculator,
+    brackets_for_year,
     round_tax,
     tax_on_cumulative,
 )
@@ -52,18 +55,90 @@ class TestTaxScale(unittest.TestCase):
     def test_monthly_split_sums_to_year_tax(self):
         """Сумма месячных налогов равна годовому налогу (нарастающий итог)."""
         incomes = [D(600_000)] * 12
-        calc = YearTaxCalculator(year=2026)
+        calc = YearTaxCalculator(year=2025)
         total_tax = sum((calc.add_month(i).tax for i in incomes), Decimal(0))
         # 7.2 млн: 650к (13% с 5млн) + 15% с 2.2млн (330к) = 980к
         self.assertEqual(total_tax, D(980_000))
 
     def test_high_income_crosses_brackets_midyear(self):
         # 12 месяцев по 1 млн = 12 млн; налог = 650к + 15%*7млн = 1.7 млн
-        calc = YearTaxCalculator(year=2026)
+        calc = YearTaxCalculator(year=2025)
         taxes = [calc.add_month(D(1_000_000)).tax for _ in range(12)]
         self.assertEqual(sum(taxes), D(1_700_000))
         # в месяце перехода через 5 млн налог больше 13%
         self.assertGreater(taxes[5], D(130_000))
+
+
+class TestScale2026(unittest.TestCase):
+    """С 2026 года первая ступень 13% действует только до 2,4 млн накопленного дохода."""
+
+    def test_2025_scale_still_13_until_5mln(self):
+        self.assertEqual(tax_on_cumulative(D(2_400_000), BRACKETS_2025), D(312_000))
+        self.assertEqual(tax_on_cumulative(D(5_000_000), BRACKETS_2025), D(650_000))
+
+    def test_2026_scale_15_percent_above_2_4mln(self):
+        # ровно 2,4 млн -> только 13%
+        self.assertEqual(tax_on_cumulative(D(2_400_000), BRACKETS_2026), D(312_000))
+        # 3 млн -> 312к + 15% с 600к (90к) = 402к
+        self.assertEqual(tax_on_cumulative(D(3_000_000), BRACKETS_2026), D(402_000))
+        # 5 млн -> 312к + 15% с 2,6 млн (390к) = 702к
+        self.assertEqual(tax_on_cumulative(D(5_000_000), BRACKETS_2026), D(702_000))
+        # 6 млн -> 702к + 18% с 1 млн = 882к
+        self.assertEqual(tax_on_cumulative(D(6_000_000), BRACKETS_2026), D(882_000))
+        # 25 млн -> 702к + 18%*15млн(2.7) + 20%*5млн(1) = 4.402 млн
+        self.assertEqual(tax_on_cumulative(D(25_000_000), BRACKETS_2026), D(4_402_000))
+        # 55 млн -> 702к + 18%*15млн(2.7) + 20%*5млн(1) + 22% с 5 млн (1.1) = 10.502 млн
+        self.assertEqual(tax_on_cumulative(D(55_000_000), BRACKETS_2026), D(10_502_000))
+
+    def test_brackets_for_year_selection(self):
+        self.assertIs(brackets_for_year(2025), BRACKETS_2025)
+        self.assertIs(brackets_for_year(2026), BRACKETS_2026)
+        self.assertIs(brackets_for_year(2027), BRACKETS_2026)
+
+    def test_monthly_crossing_2_4mln_in_2026(self):
+        """Доход 300к/мес: превышение 2,4 млн происходит внутри августа —
+        налог переходного месяца больше 13% (часть базы уже по ставке 15%)."""
+        calc = YearTaxCalculator(year=2026)
+        taxes = [calc.add_month(D(300_000)).tax for _ in range(12)]
+        # январь–июль: накоплено до 2,1 млн — чистые 13%
+        self.assertEqual(taxes[6], D(39_000))
+        # август: база 2,1->2,4 млн — 13% (39 000), ровно на границе, без превышения
+        self.assertEqual(taxes[7], D(39_000))
+        # сентябрь: база 2,4->2,7 млн — вся выше границы -> ровно 15%
+        self.assertEqual(taxes[8], D(45_000))
+        # год: 312к (13% с 2,4 млн) + 15% с 1,2 млн = 492к
+        self.assertEqual(sum(taxes), D(492_000))
+
+    def test_month_crossing_midmonth_has_rate_above_13(self):
+        """Если граница 2,4 млн проходит внутри месяца (доход 350к/мес),
+        налог этого месяца эффективной ставкой больше 13%."""
+        calc = YearTaxCalculator(year=2026)
+        taxes = [calc.add_month(D(350_000)).tax for _ in range(12)]
+        # июль: база 2,1->2,45 млн: 300к по 13% (39 000) + 50к по 15% (7 500)
+        self.assertEqual(taxes[6], D(46_500))
+        self.assertGreater(taxes[6] / D(350_000), D("0.13"))
+
+    def test_monthly_crossing_2_4mln_midmonth_december(self):
+        """Доход 200к/мес: ровно 2,4 млн накапливается к концу декабря,
+        поэтому весь 2026 год идёт 13% (превышения нет)."""
+        calc = YearTaxCalculator(year=2026)
+        taxes = [calc.add_month(D(200_000)).tax for _ in range(12)]
+        self.assertTrue(all(t == D(26_000) for t in taxes))
+        self.assertEqual(sum(taxes), D(312_000))
+        # а при доходе 210к/мес превышение происходит в декабре
+        calc2 = YearTaxCalculator(year=2026)
+        taxes2 = [calc2.add_month(D(210_000)).tax for _ in range(12)]
+        self.assertGreater(taxes2[11], round_tax(D(210_000) * D("0.13")))
+
+    def test_same_income_different_tax_by_year(self):
+        """Один и тот же доход в 2025 и 2026 даёт разный налог после 2,4 млн."""
+        c25 = YearTaxCalculator(year=2025)
+        c26 = YearTaxCalculator(year=2026)
+        t25 = sum((c25.add_month(D(300_000)).tax for _ in range(12)), Decimal(0))
+        t26 = sum((c26.add_month(D(300_000)).tax for _ in range(12)), Decimal(0))
+        # 3,6 млн: 2025 — всё 13% = 468 000; 2026 — 312к + 15% с 1,2 млн = 492 000
+        self.assertEqual(t25, D(468_000))
+        self.assertEqual(t26, D(492_000))
 
 
 class TestChildDeductions(unittest.TestCase):

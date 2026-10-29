@@ -1,13 +1,22 @@
-"""НДФЛ (РФ): прогрессивная шкала 2025 года + стандартные вычеты на детей.
+"""НДФЛ (РФ): прогрессивная шкала 2025/2026 годов + стандартные вычеты на детей.
 
-Шкала (ФЗ №176-ФЗ от 12.07.2024, действует с 01.01.2025), считается нарастающим
-итогом с начала года по совокупному доходу:
+Шкала до 2026 года включительно переходного периода (ФЗ №176-ФЗ от 12.07.2024,
+действует с 01.01.2025), считается нарастающим итогом с начала года по
+совокупному доходу:
 
-    до 5    млн руб  -> 13%
-    св. 5   до 20 млн -> 13% с 5 млн + 15% с превышения
-    св. 20  до 50 млн -> ... + 18% с превышения
-    св. 50  до 80 млн -> ... + 20% с превышения
-    св. 80  млн       -> ... + 22% с превышения
+    2025 год:
+        до 5    млн руб  -> 13%
+        св. 5   до 20 млн -> 13% с 5 млн + 15% с превышения
+        св. 20  до 50 млн -> ... + 18% с превышения
+        св. 50  до 80 млн -> ... + 20% с превышения
+        св. 80  млн       -> ... + 22% с превышения
+
+    С 2026 года верхняя граница первой ступени (13%) снижена до 2,4 млн руб:
+        до 2,4  млн руб  -> 13%
+        св. 2,4 до 5 млн  -> 15% с превышения
+        св. 5   до 20 млн -> 18% с превышения
+        св. 20  до 50 млн -> 20% с превышения
+        св. 50  млн       -> 22% с превышения
 
 Стандартные вычеты (ст. 218 НК РФ) уменьшают налоговую базу каждый месяц,
 пока совокупный доход с начала года не превысит лимит:
@@ -23,16 +32,38 @@ from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 
 # ---------------------------------------------------------------------------
-# Шкала НДФЛ 2025
+# Шкалы НДФЛ (ФЗ №176-ФЗ от 12.07.2024)
 # ---------------------------------------------------------------------------
 
-BRACKETS = [
-    (Decimal("5000000"), Decimal("0.13")),
-    (Decimal("20000000"), Decimal("0.15")),
-    (Decimal("50000000"), Decimal("0.18")),
-    (Decimal("80000000"), Decimal("0.20")),
-    (None, Decimal("0.22")),
+
+def _d(x: str) -> Decimal:
+    return Decimal(x)
+
+
+BRACKETS_2025 = [
+    (_d("5000000"), _d("0.13")),
+    (_d("20000000"), _d("0.15")),
+    (_d("50000000"), _d("0.18")),
+    (_d("80000000"), _d("0.20")),
+    (None, _d("0.22")),
 ]
+
+# С 2026 года первая ступень 13% действует только до 2,4 млн накопленного дохода
+BRACKETS_2026 = [
+    (_d("2400000"), _d("0.13")),
+    (_d("5000000"), _d("0.15")),
+    (_d("20000000"), _d("0.18")),
+    (_d("50000000"), _d("0.20")),
+    (None, _d("0.22")),
+]
+
+# Совместимость: BRACKETS — шкала 2025 года
+BRACKETS = BRACKETS_2025
+
+
+def brackets_for_year(year: int) -> list[tuple[Decimal | None, Decimal]]:
+    """Возвращает шкалу НДФЛ для налогового периода (года)."""
+    return BRACKETS_2025 if year <= 2025 else BRACKETS_2026
 
 CHILD_DEDUCTION_AMOUNTS = [Decimal("1400"), Decimal("2800")] + [Decimal("6000")] * 20
 CHILD_INCOME_LIMIT = Decimal("450000")
@@ -48,13 +79,19 @@ def money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def tax_on_cumulative(income: Decimal) -> Decimal:
-    """Налог с накопленного дохода по годовой шкале (без учёта вычетов)."""
+def tax_on_cumulative(income: Decimal, brackets: list | None = None) -> Decimal:
+    """Налог с накопленного дохода по годовой шкале (без учёта вычетов).
+
+    `brackets` — шкала НДФЛ; по умолчанию используется шкала 2025 года.
+    Для расчёта по году передавайте `brackets_for_year(year)`.
+    """
+    if brackets is None:
+        brackets = BRACKETS_2025
     income = max(income, Decimal("0"))
     remaining = income
     prev_threshold = Decimal("0")
     tax = Decimal("0")
-    for threshold, rate in BRACKETS:
+    for threshold, rate in brackets:
         if threshold is None:
             tax += remaining * rate
             break
@@ -121,6 +158,7 @@ class YearTaxCalculator:
 
     def __init__(self, year: int, deductions: DeductionProfile | None = None):
         self.year = year
+        self.brackets = brackets_for_year(year)
         self.deductions = deductions or DeductionProfile()
         self.cumulative_gross = Decimal("0")
         self.cumulative_deductions = Decimal("0")
@@ -135,7 +173,10 @@ class YearTaxCalculator:
         self.cumulative_deductions += deduction
         base_after = self.cumulative_gross - self.cumulative_deductions
 
-        month_tax = round_tax(tax_on_cumulative(base_after) - tax_on_cumulative(base_before))
+        month_tax = round_tax(
+            tax_on_cumulative(base_after, self.brackets)
+            - tax_on_cumulative(base_before, self.brackets)
+        )
         if month_tax < 0:  # налог не может быть отрицательным
             month_tax = Decimal("0")
 
