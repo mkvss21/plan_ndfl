@@ -1,0 +1,18 @@
+{
+  "year": 2026,
+  "start_month": 1,
+  "end_month": 12,
+  "salary_periods": [
+    { "salary": 150000, "start": "2026-01-01", "end": "2026-06-30" },
+    { "salary": 180000, "start": "2026-07-01" }
+  ],
+  "bonuses": [
+    { "month": "2026-03-01", "amount": 50000, "note": "премия за квартал" },
+    { "month": "2026-06-01", "percent_of_salary": 100, "note": "летняя премия" },
+    { "month": "2026-12-01", "percent_of_salary": 150, "note": "годовая премия" }
+  ],
+  "children": [
+    { "name": "Анна" },
+    { "name": "Борис" }
+  ]
+}
