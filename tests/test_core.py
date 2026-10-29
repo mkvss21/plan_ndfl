@@ -242,5 +242,54 @@ class TestEndToEnd(unittest.TestCase):
             self.assertEqual(r.net, D(87_000))
 
 
+class TestDateValidation(unittest.TestCase):
+    """Проверка существования дат (31.09, 30.02 и т.п.) при загрузке конфигурации."""
+
+    @staticmethod
+    def _raw(start="2026-01-01", end=None, bonus_month="2026-03-01"):
+        p = {"salary": 150000, "start": start}
+        if end:
+            p["end"] = end
+        return {
+            "year": 2026,
+            "salary_periods": [p],
+            "bonuses": [{"month": bonus_month, "amount": 50000}],
+        }
+
+    def test_valid_config_passes(self):
+        from zp_calculator.config import parse_config
+        cfg = parse_config(self._raw(start="2026-01-01", end="2026-06-30"))
+        self.assertEqual(cfg.periods[0].end, date(2026, 6, 30))
+
+    def test_september_31_rejected(self):
+        from zp_calculator.config import parse_config
+        with self.assertRaises(ValueError) as ctx:
+            parse_config(self._raw(end="2026-09-31"))
+        self.assertIn("Дата окончания периода №1", str(ctx.exception))
+
+    def test_start_date_31_september_rejected(self):
+        from zp_calculator.config import parse_config
+        with self.assertRaises(ValueError):
+            parse_config(self._raw(start="2026-09-31"))
+
+    def test_february_30_rejected_but_leap_day_ok(self):
+        from zp_calculator.config import parse_config
+        with self.assertRaises(ValueError):
+            parse_config(self._raw(end="2026-02-30"))  # 2026 — невисокосный
+        with self.assertRaises(ValueError):
+            parse_config(self._raw(end="2026-02-29"))
+        cfg = parse_config(self._raw(end="2028-02-29"))  # 2028 — високосный
+        self.assertEqual(cfg.periods[0].end, date(2028, 2, 29))
+
+    def test_month_13_and_bad_format_rejected(self):
+        from zp_calculator.config import parse_config
+        with self.assertRaises(ValueError):
+            parse_config(self._raw(start="2026-13-01"))
+        with self.assertRaises(ValueError):
+            parse_config(self._raw(start="31.09.2026"))
+        with self.assertRaises(ValueError):
+            parse_config(self._raw(bonus_month="2026-13-01"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

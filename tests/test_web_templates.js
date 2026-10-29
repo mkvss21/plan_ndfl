@@ -35,8 +35,9 @@ class El {
   get innerHTML() { return ""; }
   set innerHTML(v) {
     if (v === "") { this.children = []; return; }
-    // минимальный парсер плоской разметки: <tag attr="val" ...>text</tag> (без вложенности)
-    const re = /<(\w+)([^>]*)>([\s\S]*?)<\/\1>/g;
+    // минимальный парсер плоской разметки: <tag attr="val" ...>text</tag>,
+    // одиночные теги <input ...> (без закрывающего) и self-closing <tag .../>
+    const re = /<(\w+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>(?:(\s*[\s\S]*?<\/\1>)|\s)/g;
     let m;
     while ((m = re.exec(v)) !== null) {
       const child = new El(m[1]);
@@ -46,8 +47,16 @@ class El {
         if (a[1] === "data-f") child.dataset = { f: a[2] };
         else if (a[1] === "value") child.value = a[2];
       }
-      child.textContent = m[3];
+      child.textContent = m[4] || "";
       this.appendChild(child);
+    }
+    // в реальных строках ввода элементы .grid не вкладываются друг в друга,
+    // но в разметке app.js есть вложенные блоки (.grid > select > option, button > ×) —
+    // переносим детей из «контейнерных» элементов наверх, чтобы остались только input/select/button
+    for (const c of [...this.children]) {
+      if (c.tagName !== "input" && c.tagName !== "select" && c.tagName !== "button" && c.children.length) {
+        this.children.splice(this.children.indexOf(c), 1, ...c.children);
+      }
     }
   }
   appendChild(el) { this.children.push(el); return el; }
