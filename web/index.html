@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Калькулятор зарплаты и НДФЛ (РФ)</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --text:#e2e8f0; --muted:#94a3b8;
+          --accent:#38bdf8; --ok:#4ade80; --warn:#fbbf24; --err:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 "Segoe UI", system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:1120px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin-bottom:24px; }
+  h2 { font-size:16px; margin:0 0 12px; display:flex; gap:10px; justify-content:space-between; align-items:center; flex-wrap:wrap; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:18px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  input, select { background:#0b1220; color:var(--text); border:1px solid var(--line); border-radius:8px;
+                  padding:7px 9px; font:inherit; width:100%; }
+  input:focus, select:focus { outline:2px solid var(--accent); border-color:transparent; }
+  button { background:var(--accent); color:#04263a; border:0; border-radius:8px; padding:8px 14px;
+           font:inherit; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--line); font-weight:400; }
+  button:hover { filter:brightness(1.1); }
+  .grid { display:grid; gap:8px; align-items:center; }
+  .g4  { grid-template-columns: 1.2fr 1fr 1fr auto; }
+  .g4b { grid-template-columns: .9fr 1.3fr .9fr 1fr auto; }
+  .grid + .grid { margin-top:8px; }
+  .head-row { margin-bottom:6px; font-weight:600; color:var(--muted); font-size:13px; }
+  .toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin-bottom:18px; }
+  .toolbar > div { min-width:130px; }
+  label { display:block; font-size:12px; color:var(--muted); margin-bottom:2px; }
+  .totals { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
+  .stat { background:#0b1220; border:1px solid var(--line); border-radius:10px; padding:12px 14px; font-size:13px; color:var(--muted); }
+  .stat b { display:block; font-size:20px; margin-top:2px; color:var(--text); }
+  .stat.net b { color:var(--ok); } .stat.tax b { color:var(--err); } .stat.gross b { color:var(--accent); }
+  .hint { color:var(--muted); font-size:13px; margin-top:10px; }
+  .err { color:var(--err); font-weight:600; min-height:1.2em; }
+  tr.total-row td { background:#0b1220; font-weight:700; }
+  .del { background:transparent; border:1px solid var(--line); color:var(--err); border-radius:8px;
+         width:34px; padding:6px 0; font-weight:700; }
+  @media (max-width:760px){ .g4,.g4b{grid-template-columns:1fr 1fr;} .hide-sm{display:none;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Калькулятор зарплаты и НДФЛ</h1>
+  <div class="sub">Периоды с разными окладами · премии · помесячный расчёт нарастающим итогом
+    (шкала НДФЛ РФ 2025 года: 13 / 15 / 18 / 20 / 22%)</div>
+
+  <div class="toolbar">
+    <div><label>Год</label><input id="year" type="number" value="2026" min="2000" max="2100"></div>
+    <div><label>Начальный месяц</label><select id="fromMonth"></select></div>
+    <div><label>Конечный месяц</label><select id="toMonth"></select></div>
+    <button id="loadDemo" class="ghost">Загрузить пример</button>
+    <button id="clearAll" class="ghost">Очистить</button>
+  </div>
+
+  <div class="card">
+    <h2>Периоды окладов <button id="addSalary" class="ghost">+ добавить период</button></h2>
+    <div class="grid g4 head-row"><span>Оклад, ₽</span><span>Дата с</span><span>Дата по (пусто — бессрочно)</span><span></span></div>
+    <div id="salaryRows"></div>
+    <div class="hint">Смена оклада внутри месяца учитывается пропорционально календарным дням.
+      Дни, не покрытые ни одним периодом, дают 0 ₽.</div>
+  </div>
+
+  <div class="card">
+    <h2>Премии <button id="addBonus" class="ghost">+ добавить премию</button></h2>
+    <div class="grid g4b head-row"><span>Месяц</span><span>Комментарий</span><span>Тип</span><span>Значение</span><span></span></div>
+    <div id="bonusRows"></div>
+    <div class="hint">«% от оклада» — процент от оклада этого месяца (без учёта других премий).</div>
+  </div>
+
+  <div class="card">
+    <h2>Стандартные вычеты на детей (ст. 218 НК РФ)</h2>
+    <div class="grid g4" style="max-width:420px"><div><label>Количество детей</label>
+      <input id="children" type="number" min="0" max="10" value="0"></div></div>
+    <div class="hint">1-й ребёнок — 1400 ₽/мес, 2-й — 2800 ₽/мес, 3-й и далее — 6000 ₽/мес,
+      пока доход с начала года не превысит 450 000 ₽.</div>
+  </div>
+
+  <div class="card">
+    <h2>Итоги</h2>
+    <div class="totals">
+      <div class="stat gross"><span>Заработано (грязными)</span><b id="tGross">—</b></div>
+      <div class="stat tax"><span>НДФЛ уплачено</span><b id="tTax">—</b></div>
+      <div class="stat net"><span>На руки</span><b id="tNet">—</b></div>
+      <div class="stat"><span>Эффективная ставка</span><b id="tRate">—</b></div>
+    </div>
+    <div id="error" class="err" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card">
+    <h2><span>Помесячно</span><span><button id="copyBtn" class="ghost">Скопировать</button>
+      <button id="csvBtn" class="ghost">Скачать CSV</button></span></h2>
+    <div style="overflow-x:auto">
+      <table id="resultTable">
+        <thead><tr>
+          <th>Месяц</th><th>Оклад</th><th>Премии</th><th>Начислено</th>
+          <th>Вычет</th><th>НДФЛ</th><th>На руки</th><th>Ставка</th>
+          <th class="hide-sm">Начислено с начала года</th><th class="hide-sm">НДФЛ с начала года</th>
+        </tr></thead>
+        <tbody id="resultBody"></tbody>
+      </table>
+    </div>
+    <div class="hint">Расчёт выполняется локально в браузере, данные никуда не отправляются.</div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
